@@ -120,6 +120,10 @@ public partial class AssetDocumentViewModel : Document
             if (ClassIdToString.TryGetValue(a.Type, out string? classIdName) && classIdName == searchText)
                 return true;
 
+            //if (long.TryParse(searchText, out long parsedId) && a.PathId == parsedId)
+            if (a.PathId.ToString().Contains(searchText))
+                return true;
+
             return false;
         };
     }
