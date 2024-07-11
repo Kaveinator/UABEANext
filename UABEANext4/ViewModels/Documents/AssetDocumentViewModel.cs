@@ -15,6 +15,7 @@ using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using UABEANext4.AssetWorkspace;
@@ -104,6 +105,40 @@ public partial class AssetDocumentViewModel : Document
 
     partial void OnSearchTextChanged(string value) => _setDataGridFilterDb(value);
 
+    /// <summary>Used to parse the search query. You can test this filter here: https://regex101.com/r/7L94GC/3</summary>
+    public class Search {
+        static readonly Regex FilterRegex = new Regex(@"(?:\$(?<Key>([a-zA-Z]+))=(?<Value>([^\s""]+|""[^""]*""))|(?<Value>""([^""]*)""|\S+))");
+        public string Key; // The name from $name=value
+        public bool HasKey => !string.IsNullOrEmpty(Key); // Is this is key/value pair, can only be one if
+        public string Value; // The value from $name=value
+
+
+        public static IEnumerable<Search> ParseAll(string searchText) {
+            return FilterRegex.Matches(searchText)
+                .Select(match => new Search(match));
+        }
+
+        public Search(Match query) {
+            Key = query.Groups.TryGetValue(nameof(Key), out var grp) ? grp.Value.ToLower() : string.Empty;
+            Value = query.Groups.TryGetValue(nameof(Value), out grp) ? grp.Value.Trim('\"') : string.Empty;
+        }
+
+        public bool IsMatch(AssetInst a, Dictionary<AssetClassID, string> classIdToString) {
+            // Returns true if there is no key (allowing checks to pass), or if one is present checks it against the passed string
+            Func<string, bool> keyChk = key => HasKey ? Key == key : true;
+            
+            if (keyChk("name") && a.DisplayName.Contains(Value, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (keyChk("type") && classIdToString.TryGetValue(a.Type, out string? classIdName) && classIdName.Contains(Value, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (keyChk("pathid") && a.PathId.ToString().Contains(Value))
+                return true;
+
+            return false;
+        }
+    }
     private Func<object, bool> SetDataGridFilter(string searchText)
     {
         if (string.IsNullOrEmpty(searchText))
@@ -114,14 +149,17 @@ public partial class AssetDocumentViewModel : Document
             if (o is not AssetInst a)
                 return false;
 
-            if (a.DisplayName.Contains(searchText, StringComparison.OrdinalIgnoreCase))
+            var searchObjects = Search.ParseAll(searchText);
+
+            IEnumerable<Search> namedQueries = searchObjects.Where(so => so.HasKey),
+                unnamedQueries = searchObjects.Where(so => !so.HasKey);
+            
+            // All named queries must match to show up
+            if (namedQueries.Any() && namedQueries.All(so => so.IsMatch(a, ClassIdToString)))
                 return true;
 
-            if (ClassIdToString.TryGetValue(a.Type, out string? classIdName) && classIdName == searchText)
-                return true;
-
-            //if (long.TryParse(searchText, out long parsedId) && a.PathId == parsedId)
-            if (a.PathId.ToString().Contains(searchText))
+            // Any of the unnamed queries must match to show up
+            if (unnamedQueries.Any(so => so.IsMatch(a, ClassIdToString)))
                 return true;
 
             return false;
